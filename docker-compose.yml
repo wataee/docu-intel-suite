@@ -1,0 +1,90 @@
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-invoice}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-invoice}
+      POSTGRES_DB: ${POSTGRES_DB:-invoice_pipeline}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-invoice} -d ${POSTGRES_DB:-invoice_pipeline}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER:-invoice}:${POSTGRES_PASSWORD:-invoice}@postgres:5432/${POSTGRES_DB:-invoice_pipeline}}
+      DATABASE_URL_SYNC: ${DATABASE_URL_SYNC:-postgresql://${POSTGRES_USER:-invoice}:${POSTGRES_PASSWORD:-invoice}@postgres:5432/${POSTGRES_DB:-invoice_pipeline}}
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      LLM_PROVIDER: ${LLM_PROVIDER:-auto}
+      LM_STUDIO_BASE_URL: http://host.docker.internal:1234/v1
+      LM_STUDIO_MODEL: ${LM_STUDIO_MODEL:-}
+      OLLAMA_BASE_URL: http://host.docker.internal:11434/v1
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-gemma3:4b}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-5}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-flash-latest}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.1-8b-instant}
+      GROQ_BASE_URL: ${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
+      CORS_ORIGINS: ${CORS_ORIGINS:-'["http://localhost:3000"]'}
+      DEBUG: ${DEBUG:-false}
+      CLERK_JWKS_URL: ${CLERK_JWKS_URL:-}
+      CLERK_ISSUER: ${CLERK_ISSUER:-}
+      CLERK_AUDIENCE: ${CLERK_AUDIENCE:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    volumes:
+      - upload_data:/app/data/uploads
+      - hf_cache:/app/.cache/huggingface
+      - runtime_settings:/app/config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY:?NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY must be set in .env}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/py}
+    ports:
+      - "3000:3000"
+    environment:
+      INTERNAL_API_URL: http://api:8000
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api/py}
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:?CLERK_SECRET_KEY must be set in .env}
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  upload_data:
+  hf_cache:
+  runtime_settings:
